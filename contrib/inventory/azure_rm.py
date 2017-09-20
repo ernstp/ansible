@@ -193,7 +193,6 @@ import os
 import re
 import sys
 import inspect
-import traceback
 
 
 from packaging.version import Version
@@ -207,12 +206,11 @@ HAS_AZURE_EXC = None
 try:
     from msrestazure.azure_exceptions import CloudError
     from msrestazure import azure_cloud
-    from azure.mgmt.compute import __version__ as azure_compute_version
     from azure.common import AzureMissingResourceHttpError, AzureHttpError
     from azure.common.credentials import ServicePrincipalCredentials, UserPassCredentials
-    from azure.mgmt.network import NetworkManagementClient
+    from azure.mgmt.network import NetworkManagementClient, VERSION as azure_network_version
+    from azure.mgmt.compute import ComputeManagementClient, VERSION as azure_compute_version
     from azure.mgmt.resource.resources import ResourceManagementClient
-    from azure.mgmt.compute import ComputeManagementClient
 except ImportError as exc:
     HAS_AZURE_EXC = exc
     HAS_AZURE = False
@@ -241,6 +239,8 @@ AZURE_CONFIG_SETTINGS = dict(
 )
 
 AZURE_MIN_VERSION = "2.0.0"
+AZURE_NETWORK_MIN_VERSION = "1.4.0"
+AZURE_COMPUTE_MIN_VERSION = "2.1.0"
 
 
 def azure_id_to_dict(id):
@@ -846,7 +846,20 @@ class AzureInventory(object):
 
 def main():
     if not HAS_AZURE:
-        sys.exit("The Azure python sdk is not installed (try `pip install 'azure>={0}' --upgrade`) - {1}".format(AZURE_MIN_VERSION, HAS_AZURE_EXC))
+        sys.exit("The Azure python sdk is not installed (try `pip install 'azure>={0}' --upgrade`) - {1}".format(
+            AZURE_MIN_VERSION, HAS_AZURE_EXC))
+
+    if Version(azure_compute_version) < Version(AZURE_COMPUTE_MIN_VERSION):
+        sys.exit("Expecting azure-mgmt-compute to be at least {0}. Found version {1}.\n"
+                 "You may need a prerelease version of an azure component.\n"
+                 " (try `pip install 'azure-mgmt-compute>={0}' --pre --upgrade`)".format(
+            AZURE_COMPUTE_MIN_VERSION, azure_compute_version))
+
+    if Version(azure_network_version) < Version(AZURE_NETWORK_MIN_VERSION):
+        sys.exit("Expecting azure-mgmt-network to be at least {0}. Found version {1}.\n"
+                 "You may need a prerelease version of an azure component.\n"
+                 " (try `pip install 'azure-mgmt-network>={0}' --pre --upgrade`)".format(
+            AZURE_NETWORK_MIN_VERSION, azure_network_version))
 
     AzureInventory()
 

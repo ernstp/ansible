@@ -70,6 +70,8 @@ options:
 requirements:
     - "python >= 2.7"
     - "azure >= 2.0.0"
+    - "azure-mgmt-network >= 1.4.0"
+    - "azure-mgmt-compute >= 2.1.0"
 
 notes:
     - For authentication with Azure you can pass parameters, set environment variables or use a profile stored
