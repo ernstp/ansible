@@ -235,7 +235,8 @@ AZURE_CONFIG_SETTINGS = dict(
     group_by_resource_group='AZURE_GROUP_BY_RESOURCE_GROUP',
     group_by_location='AZURE_GROUP_BY_LOCATION',
     group_by_security_group='AZURE_GROUP_BY_SECURITY_GROUP',
-    group_by_tag='AZURE_GROUP_BY_TAG'
+    group_by_tag='AZURE_GROUP_BY_TAG',
+    ssh_nat='AZURE_SSH_NAT',
 )
 
 AZURE_MIN_VERSION = "2.0.0"
@@ -462,6 +463,8 @@ class AzureInventory(object):
         self._network_client = rm.network_client
         self._resource_client = rm.rm_client
         self._security_groups = None
+        self._ssh_nat_rules = None
+
 
         self.resource_groups = []
         self.tags = None
@@ -472,6 +475,7 @@ class AzureInventory(object):
         self.group_by_security_group = True
         self.group_by_tag = True
         self.include_powerstate = True
+        self.ssh_nat = False
 
         self._inventory = dict(
             _meta=dict(
@@ -493,6 +497,9 @@ class AzureInventory(object):
 
         if self._args.no_powerstate:
             self.include_powerstate = False
+
+        if self._args.ssh_nat:
+            self.ssh_nat = True
 
         self.get_inventory()
         print(self._json_format_dict(pretty=self._args.pretty))
@@ -534,6 +541,8 @@ class AzureInventory(object):
                             help='Return inventory for comma separated list of locations')
         parser.add_argument('--no-powerstate', action='store_true', default=False,
                             help='Do not include the power state of each virtual host')
+        parser.add_argument('--ssh-nat', action='store_true', default=False,
+                            help='Try to find NAT ports for SSH connection')
         return parser.parse_args()
 
     def get_inventory(self):
@@ -659,6 +668,16 @@ class AzureInventory(object):
                             if public_ip_address.dns_settings:
                                 host_vars['fqdn'] = public_ip_address.dns_settings.fqdn
 
+            # If 
+            if self.ssh_nat and not host_vars['ansible_host']:
+                target_nic_parts = host_vars['network_interface_id'].split("/")[:9]
+                self._get_ssh_nat(resource_group)
+                for match_nic, data in self._ssh_nat_rules[resource_group].items():
+                    match_nic_parts = match_nic.split("/")[:9]
+                    if target_nic_parts == match_nic_parts:
+                        host_vars['ansible_host'] = data['front_ip']
+                        host_vars['ansible_port'] = data['front_port']
+
             self._add_host(host_vars)
 
     def _selected_machines(self, virtual_machines):
@@ -684,6 +703,37 @@ class AzureInventory(object):
                         self._security_groups[resource_group][interface.id] = dict(
                             name=group.name,
                             id=group.id
+                        )
+
+    def _public_ip_from_id(self, ip_id):
+        # https://github.com/Azure/azure-sdk-for-python/issues/897
+        ip_reference = ip_id.split('/')
+        ip_group = ip_reference[4]
+        ip_name = ip_reference[8]
+        return self._network_client.public_ip_addresses.get(ip_group, ip_name).ip_address
+
+    def _get_ssh_nat(self, resource_group):
+        ''' For a given resource_group build a mapping of network_interface.id to load balancer port forwardings '''
+        if not self._ssh_nat_rules:
+            self._ssh_nat_rules = dict()
+        if not self._ssh_nat_rules.get(resource_group):
+            self._ssh_nat_rules[resource_group] = dict()
+            for load_balancer in self._network_client.load_balancers.list(resource_group):
+                # We can only have a single ansible_host so simply pick the first frontend ip
+                if len(load_balancer.frontend_ip_configurations) > 0:
+                    lb_frontend_ip = load_balancer.frontend_ip_configurations[0]
+                    front_ip = self._public_ip_from_id(lb_frontend_ip.id)
+                else:
+                    continue
+
+                for lb_inbound_nat_rule in load_balancer.inbound_nat_rules:
+                    nic_id = lb_inbound_nat_rule.backend_ip_configuration.id
+                    front_port = lb_inbound_nat_rule.frontend_port
+                    machine_port = lb_inbound_nat_rule.backend_port
+                    if machine_port == 22:
+                        self._ssh_nat_rules[resource_group][nic_id] = dict(
+                            front_ip=front_ip,
+                            front_port=front_port
                         )
 
     def _get_powerstate(self, resource_group, name):
